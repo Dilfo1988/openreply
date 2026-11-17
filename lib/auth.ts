@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import { headers } from "next/headers";
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Nodemailer from "next-auth/providers/nodemailer";
 import Resend from "next-auth/providers/resend";
@@ -63,7 +65,40 @@ export const authConfig = {
 
 export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
 
+/**
+ * Programmatic access for trusted automation (e.g. an MCP server run by the
+ * workspace owner). Enabled only when both OPENREPLY_API_KEY (>= 32 chars) and
+ * OPENREPLY_API_USER_EMAIL are set; the key then acts as that user. Compared in
+ * constant time. Without the env vars this is a no-op.
+ */
+async function getApiKeyUserId(): Promise<string | null> {
+  const key = process.env.OPENREPLY_API_KEY;
+  const email = process.env.OPENREPLY_API_USER_EMAIL?.trim().toLowerCase();
+  if (!key || key.length < 32 || !email) return null;
+
+  let header: string | null = null;
+  try {
+    header = (await headers()).get("authorization");
+  } catch {
+    return null; // called outside a request scope
+  }
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  if (!match) return null;
+
+  const given = createHash("sha256").update(match[1].trim()).digest();
+  const expected = createHash("sha256").update(key).digest();
+  if (!timingSafeEqual(given, expected)) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  return user?.id ?? null;
+}
+
 export async function getCurrentUserId(): Promise<string | null> {
+  const apiUserId = await getApiKeyUserId();
+  if (apiUserId) return apiUserId;
   const session = await auth();
   return session?.user?.id ?? null;
 }
