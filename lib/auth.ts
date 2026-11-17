@@ -72,7 +72,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
  * constant time. Without the env vars this is a no-op.
  */
 async function getApiKeyUserId(): Promise<string | null> {
-  const key = process.env.OPENREPLY_API_KEY;
+  const key = process.env.OPENREPLY_API_KEY?.trim();
   const email = process.env.OPENREPLY_API_USER_EMAIL?.trim().toLowerCase();
   if (!key || key.length < 32 || !email) return null;
 
@@ -86,13 +86,19 @@ async function getApiKeyUserId(): Promise<string | null> {
   if (!match) return null;
 
   const given = createHash("sha256").update(match[1].trim()).digest();
-  const expected = createHash("sha256").update(key).digest();
-  if (!timingSafeEqual(given, expected)) return null;
+  const expected = createHash("sha256").update(key.trim()).digest();
+  if (!timingSafeEqual(given, expected)) {
+    console.warn("[api-key] rejected: key does not match OPENREPLY_API_KEY");
+    return null;
+  }
 
-  const user = await prisma.user.findUnique({
-    where: { email },
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
     select: { id: true },
   });
+  if (!user) {
+    console.warn("[api-key] key ok but no user found for OPENREPLY_API_USER_EMAIL");
+  }
   return user?.id ?? null;
 }
 
